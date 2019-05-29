@@ -68,6 +68,7 @@ class Base(torch.utils.data.dataset.Dataset):
     def num_classes() -> int:
         raise NotImplementedError
 
+    ##所有和图像预处理相关的方法，都可以用静态方法的形式，写道dataset类的内部
     @staticmethod
     def preprocess(image: PIL.Image.Image, image_min_side: float, image_max_side: float) -> Tuple[Tensor, float]:
         # resize according to the rules:
@@ -89,6 +90,10 @@ class Base(torch.utils.data.dataset.Dataset):
 
     @staticmethod
     def padding_collate_fn(batch: List[Tuple[str, Tensor, Tensor, Tensor, Tensor]]) -> Tuple[List[str], Tensor, Tensor, Tensor, Tensor]:
+        #这是Dataloader中用到的collate_fn:当取出一批数据后，做批处理
+        #输入是以tuple为元素的List
+        #输出是tuple
+        
         image_id_batch, image_batch, scale_batch, bboxes_batch, labels_batch = zip(*batch)
 
         max_image_width = max([it.shape[2] for it in image_batch])
@@ -100,19 +105,24 @@ class Base(torch.utils.data.dataset.Dataset):
         padded_bboxes_batch = []
         padded_labels_batch = []
 
+        #数据整理与对齐
+        #1.所有图像按最大图像的尺寸进行填充，最后尺寸一致
         for image in image_batch:
             padded_image = F.pad(input=image, pad=(0, max_image_width - image.shape[2], 0, max_image_height - image.shape[1]))  # pad has format (left, right, top, bottom)
             padded_image_batch.append(padded_image)
 
+        #2.所有图像都整理为有相同数量的bbox
         for bboxes in bboxes_batch:
             padded_bboxes = torch.cat([bboxes, torch.zeros(max_bboxes_length - len(bboxes), 4).to(bboxes)])
             padded_bboxes_batch.append(padded_bboxes)
 
+        #3.所有图像都整理为有相同数量的labels
         for labels in labels_batch:
             padded_labels = torch.cat([labels, torch.zeros(max_labels_length - len(labels)).to(labels)])
             padded_labels_batch.append(padded_labels)
 
         image_id_batch = list(image_id_batch)
+        #增加一个批的维度
         padded_image_batch = torch.stack(padded_image_batch, dim=0)
         scale_batch = torch.stack(scale_batch, dim=0)
         padded_bboxes_batch = torch.stack(padded_bboxes_batch, dim=0)

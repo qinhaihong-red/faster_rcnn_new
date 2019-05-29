@@ -104,7 +104,7 @@ def voc_eval(detpath,
         # load annots
         recs = {}
         for i, imagename in enumerate(imagenames):
-            recs[imagename] = parse_rec(annopath.format(imagename))
+            recs[imagename] = parse_rec(annopath.format(imagename)) # '{:s}.xml' 在这里执行格式化 
             if i % 100 == 0:
                 print('Reading annotation for {:d}/{:d}'.format(
                     i + 1, len(imagenames)))

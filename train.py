@@ -115,7 +115,9 @@ def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to
 if __name__ == '__main__':
     def main():
         parser = argparse.ArgumentParser()
+        # 'voc2007', 'coco2017'等
         parser.add_argument('-s', '--dataset', type=str, choices=DatasetBase.OPTIONS, required=True, help='name of dataset')
+        # OPTIONS = ['resnet18', 'resnet50', 'resnet101']
         parser.add_argument('-b', '--backbone', type=str, choices=BackboneBase.OPTIONS, required=True, help='name of backbone model')
         parser.add_argument('-d', '--data_dir', type=str, default='./data', help='path to data directory')
         parser.add_argument('-o', '--outputs_dir', type=str, default='./outputs', help='path to outputs directory')

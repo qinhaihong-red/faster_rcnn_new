@@ -5,7 +5,10 @@ from roi.pooler import Pooler
 
 
 class Config(object):
-
+    '''
+    使用类变量+类方法，实现图像宽高、anchor等属性配置的读写。
+    这个配置类是个基类。
+    '''
     IMAGE_MIN_SIDE: float = 600.0
     IMAGE_MAX_SIDE: float = 1000.0
 

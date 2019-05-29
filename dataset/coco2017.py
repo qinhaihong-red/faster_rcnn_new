@@ -80,6 +80,8 @@ class COCO2017(Base):
         else:
             raise ValueError('invalid mode')
 
+        #CocoDetection来自torchvision
+        #Coco的annotation不同于VOC, 它是所有标注都在一个超大的.json文件中
         coco_dataset = CocoDetection(root=path_to_jpeg_images_dir, annFile=path_to_annotation)
 
         if os.path.exists(path_to_image_ids_pickle) and os.path.exists(path_to_image_id_dict_pickle):
@@ -108,6 +110,7 @@ class COCO2017(Base):
                     self._image_ids.append(image_id)
                     self._image_id_to_annotation_dict[image_id] = COCO2017.Annotation(
                         filename=os.path.join(path_to_jpeg_images_dir, '{:012d}.jpg'.format(int(image_id))),
+                        #一张图像中有若干目标，这里使用列表推断一一取出
                         objects=[COCO2017.Annotation.Object(
                             bbox=BBox(  # `ann['bbox']` is in the format [left, top, width, height]
                                 left=ann['bbox'][0],
@@ -151,6 +154,8 @@ class COCO2017(Base):
             image = ImageOps.mirror(image)
             bboxes[:, [0, 2]] = image.width - bboxes[:, [2, 0]]  # index 0 and 2 represent `left` and `right` respectively
 
+        #对每一张图像做单一处理：resize/to_tensor/normalize
+        #对一批图像的统一填充等批处理，在Dataloader中调用padding_collate_fn
         image, scale = COCO2017.preprocess(image, self._image_min_side, self._image_max_side)
         scale = torch.tensor(scale, dtype=torch.float)
         bboxes *= scale
@@ -158,13 +163,14 @@ class COCO2017(Base):
         return image_id, image, scale, bboxes, labels
 
     def evaluate(self, path_to_results_dir: str, image_ids: List[str], bboxes: List[List[float]], classes: List[int], probs: List[float]) -> Tuple[float, str]:
+        
         self._write_results(path_to_results_dir, image_ids, bboxes, classes, probs)
-
         annType = 'bbox'
         path_to_coco_dir = os.path.join(self._path_to_data_dir, 'COCO')
         path_to_annotations_dir = os.path.join(path_to_coco_dir, 'annotations')
         path_to_annotation = os.path.join(path_to_annotations_dir, 'instances_val2017.json')
 
+        #COCO和COCOeval来自pycocotools, 用来帮助计算AP
         cocoGt = COCO(path_to_annotation)
         cocoDt = cocoGt.loadRes(os.path.join(path_to_results_dir, 'results.json'))
 
@@ -184,6 +190,9 @@ class COCO2017(Base):
         return mean_ap, detail
 
     def _write_results(self, path_to_results_dir: str, image_ids: List[str], bboxes: List[List[float]], classes: List[int], probs: List[float]):
+        #输出结果按照cocopytools的格式写入文件
+        #这样后续可以使用cocopytools提供的工具计算AP
+        
         results = []
         for image_id, bbox, cls, prob in zip(image_ids, bboxes, classes, probs):
             results.append(

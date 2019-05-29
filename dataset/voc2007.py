@@ -45,14 +45,17 @@ class VOC2007(Base):
     def __init__(self, path_to_data_dir: str, mode: Base.Mode, image_min_side: float, image_max_side: float):
         super().__init__(path_to_data_dir, mode, image_min_side, image_max_side)
 
-        path_to_voc2007_dir = os.path.join(self._path_to_data_dir, 'VOCdevkit', 'VOC2007')
-        path_to_imagesets_main_dir = os.path.join(path_to_voc2007_dir, 'ImageSets', 'Main')
-        path_to_annotations_dir = os.path.join(path_to_voc2007_dir, 'Annotations')
+        path_to_voc2007_dir = os.path.join(self._path_to_data_dir, 'VOCdevkit', 'VOC2007')#VOCdevkit/VOC2007
+        path_to_imagesets_main_dir = os.path.join(path_to_voc2007_dir, 'ImageSets', 'Main')#VOCdevkit/VOC2007/ImageSets/Main
+        path_to_annotations_dir = os.path.join(path_to_voc2007_dir, 'Annotations')#VOCdevkit/VOC2007/Annotations
+        #VOCdevkit/VOC2007/JPEGImages, 共9963张图像
         self._path_to_jpeg_images_dir = os.path.join(path_to_voc2007_dir, 'JPEGImages')
 
         if self._mode == VOC2007.Mode.TRAIN:
+            #VOCdevkit/VOC2007/ImageSets/Main/trainval.txt ,共5011张训练+验证图像
             path_to_image_ids_txt = os.path.join(path_to_imagesets_main_dir, 'trainval.txt')
         elif self._mode == VOC2007.Mode.EVAL:
+            ##VOCdevkit/VOC2007/ImageSets/Main/test.txt ， 共4952张测试图像
             path_to_image_ids_txt = os.path.join(path_to_imagesets_main_dir, 'test.txt')
         else:
             raise ValueError('invalid mode')
@@ -61,9 +64,47 @@ class VOC2007(Base):
             lines = f.readlines()
             self._image_ids = [line.rstrip() for line in lines]
 
+
+        '''
+        labels中000001.txt示例：
+        11 0.34419263456090654 0.611 0.4164305949008499 0.262
+        14 0.509915014164306 0.51 0.9745042492917847 0.972
+
+        Annotations中000001.xml示例（局部）：
+        <annotation>
+            <folder>VOC2007</folder>
+            <filename>000001.jpg</filename>
+            ...
+            <object>
+                <name>dog</name>
+                ...
+                <difficult>0</difficult>
+                <bndbox>
+                    <xmin>48</xmin>
+                    <ymin>240</ymin>
+                    <xmax>195</xmax>
+                    <ymax>371</ymax>
+                </bndbox>
+            </object>
+            <object>
+                <name>person</name>
+                ...
+                <bndbox>
+                    <xmin>8</xmin>
+                    <ymin>12</ymin>
+                    <xmax>352</xmax>
+                    <ymax>498</ymax>
+                </bndbox>
+            </object>
+
+
+        label只有数字label以及框用 中心-宽高（再除以图像的宽高）表示的bbox.
+        annotation中就比较详细，且框坐标用 左上右下 的形式表示.
+
+        '''
+
         self._image_id_to_annotation_dict = {}
         self._image_ratios = []
-
         for image_id in self._image_ids:
             path_to_annotation_xml = os.path.join(path_to_annotations_dir, f'{image_id}.xml')
             tree = ET.ElementTree(file=path_to_annotation_xml)
@@ -98,8 +139,8 @@ class VOC2007(Base):
         bboxes = [obj.bbox.tolist() for obj in annotation.objects if not obj.difficult]
         labels = [VOC2007.CATEGORY_TO_LABEL_DICT[obj.name] for obj in annotation.objects if not obj.difficult]
 
-        bboxes = torch.tensor(bboxes, dtype=torch.float)
-        labels = torch.tensor(labels, dtype=torch.long)
+        bboxes = torch.tensor(bboxes, dtype=torch.float)#(_n,4)
+        labels = torch.tensor(labels, dtype=torch.long)#(_n,)
 
         image = Image.open(os.path.join(self._path_to_jpeg_images_dir, annotation.filename))
 
@@ -115,8 +156,8 @@ class VOC2007(Base):
         return image_id, image, scale, bboxes, labels
 
     def evaluate(self, path_to_results_dir: str, image_ids: List[str], bboxes: List[List[float]], classes: List[int], probs: List[float]) -> Tuple[float, str]:
+        
         self._write_results(path_to_results_dir, image_ids, bboxes, classes, probs)
-
         path_to_voc2007_dir = os.path.join(self._path_to_data_dir, 'VOCdevkit', 'VOC2007')
         path_to_main_dir = os.path.join(path_to_voc2007_dir, 'ImageSets', 'Main')
         path_to_annotations_dir = os.path.join(path_to_voc2007_dir, 'Annotations')
@@ -128,12 +169,12 @@ class VOC2007(Base):
                 path_to_cache_dir = os.path.join('caches', 'voc2007')
                 os.makedirs(path_to_cache_dir, exist_ok=True)
                 _, _, ap = voc_eval(detpath=os.path.join(path_to_results_dir, 'comp3_det_test_{:s}.txt'.format(category)),
-                                    annopath=os.path.join(path_to_annotations_dir, '{:s}.xml'),
+                                    annopath=os.path.join(path_to_annotations_dir, '{:s}.xml'),#格式化在voc_eval函数中处理： annopath.format(imagename). 这里先占位.
                                     imagesetfile=os.path.join(path_to_main_dir, 'test.txt'),
                                     classname=category,
                                     cachedir=path_to_cache_dir,
                                     ovthresh=0.5,
-                                    use_07_metric=True)
+                                    use_07_metric=True)#这里采用的AP计算方式为11点插值，不是所有AUC求和.
             except IndexError:
                 ap = 0
 
@@ -149,9 +190,11 @@ class VOC2007(Base):
 
     def _write_results(self, path_to_results_dir: str, image_ids: List[str], bboxes: List[List[float]], classes: List[int], probs: List[float]):
         class_to_txt_files_dict = {}
+        #一个类一个文件
         for c in range(1, VOC2007.num_classes()):
             class_to_txt_files_dict[c] = open(os.path.join(path_to_results_dir, 'comp3_det_test_{:s}.txt'.format(VOC2007.LABEL_TO_CATEGORY_DICT[c])), 'w')
 
+        #按图像id把结果写入到相应的类中
         for image_id, bbox, cls, prob in zip(image_ids, bboxes, classes, probs):
             class_to_txt_files_dict[cls].write('{:s} {:f} {:f} {:f} {:f} {:f}\n'.format(image_id, prob,
                                                                                         bbox[0], bbox[1], bbox[2], bbox[3]))
