@@ -35,5 +35,5 @@ class Logger(object):
         Logger.log(logging.ERROR, message)
 
     @staticmethod
-    def anoher_fun5():
+    def anoher_fun10():
         pass
