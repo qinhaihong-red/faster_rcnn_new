@@ -14,3 +14,4 @@ data/VOCdevkit
 */__pycache__
 test/nms/*.npy
 *.so
+console.py
