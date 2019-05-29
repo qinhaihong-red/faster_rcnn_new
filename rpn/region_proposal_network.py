@@ -188,7 +188,7 @@ class RegionProposalNetwork(nn.Module):
 
         #从一批图像中，找到proposal_boxes最多的，记录数量为max_nms_n
         #其它图像的proposal_boxes要对齐max_nms_n(dim0方向，即增加行数)
-        #就是说，一批内每幅图像的proposal_boxes都要相等
+        #就是说，一批内每幅图像的proposal_boxes数量都要相等
         max_nms_proposal_bboxes_length = max([len(it) for it in nms_proposal_bboxes_batch])
         padded_proposal_bboxes = []
 
@@ -197,7 +197,7 @@ class RegionProposalNetwork(nn.Module):
                 torch.cat([
                     nms_proposal_bboxes,
                     torch.zeros(max_nms_proposal_bboxes_length - len(nms_proposal_bboxes), 4).to(nms_proposal_bboxes)
-                ])# 增加为每幅图像的proposal_boxes增加 delta 行，每行4列 . 其中 delta = max_nms_proposal_bboxes_length - len(nms_proposal_bboxes) 
+                ])#为每幅图像的proposal_boxes增加 delta 行，每行4列 . 其中 delta = max_nms_proposal_bboxes_length - len(nms_proposal_bboxes) 
             )
 
         padded_proposal_bboxes = torch.stack(padded_proposal_bboxes, dim=0)#(bn,max_nms_n,4)

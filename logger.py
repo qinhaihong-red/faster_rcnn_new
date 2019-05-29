@@ -33,3 +33,7 @@ class Logger(object):
     @staticmethod
     def e(message):
         Logger.log(logging.ERROR, message)
+
+    @staticmethod
+    def anoher_fun():
+        pass
