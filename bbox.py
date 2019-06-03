@@ -66,12 +66,18 @@ class BBox(object):
 
     @staticmethod
     def iou(source: Tensor, other: Tensor) -> Tensor:
+
+        # source是anchors(ga_n个),other是gt_boxes(gt_n)，gt_boxes要远小与anchors
+        # 假设source@(1,7600,1,4) other@(1,1,14,4)
+        # 变为：source@(1,7600,14,4) other@(1,7600,14,4)
+        # source:7600套不同的14x4坐标，每套内的14个坐标都相同
+        # other :7600套相同的14x4坐标，每套内的14个坐标都不同
         source, other = source.unsqueeze(dim=-2).repeat(1, 1, other.shape[-2], 1), \
                         other.unsqueeze(dim=-3).repeat(1, source.shape[-2], 1, 1)
 
         source_area = (source[..., 2] - source[..., 0]) * (source[..., 3] - source[..., 1])
         other_area = (other[..., 2] - other[..., 0]) * (other[..., 3] - other[..., 1])
-
+        #降低一维:(1,7600,14)
         intersection_left = torch.max(source[..., 0], other[..., 0])
         intersection_top = torch.max(source[..., 1], other[..., 1])
         intersection_right = torch.min(source[..., 2], other[..., 2])
@@ -80,6 +86,11 @@ class BBox(object):
         intersection_height = torch.clamp(intersection_bottom - intersection_top, min=0)
         intersection_area = intersection_width * intersection_height
 
+        #最后返回的是(1,7600,14),表示7600个anchor与14个gt box的iou
+        #第一行 anchor0 分别与 14个gt_box的 iou
+        #第二行 anchor1 分别与 14个gt_box的 iou
+        #...
+        #计算dim0方向的的max，可以得到与14个gt_box有最大iou的anchor
         return intersection_area / (source_area + other_area - intersection_area)
 
     @staticmethod

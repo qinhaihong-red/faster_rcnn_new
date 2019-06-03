@@ -1,5 +1,5 @@
 from typing import Tuple
-
+import torch
 import torchvision
 from torch import nn
 
@@ -12,7 +12,10 @@ class ResNet101(backbone.base.Base):
         super().__init__(pretrained)
 
     def features(self) -> Tuple[nn.Module, nn.Module, int, int]:
-        resnet101 = torchvision.models.resnet101(pretrained=self._pretrained)
+        resnet101 = torchvision.models.resnet101()
+        if self._pretrained:
+            path='/home/hh/dataset/weights/resnet101-5d3b4d8f.pth'
+            resnet101.load_state_dict(torch.load(path))
 
         # list(resnet101.children()) consists of following modules
         #   [0] = Conv2d, [1] = BatchNorm2d, [2] = ReLU,

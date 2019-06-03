@@ -1,0 +1,36 @@
+
+训练过程：
+1.rpn和detection的训练都在各自的forward中：
+rpn.forward:(features,ab,gb,w,h)->(ao,at,aol,atl)
+detection.forward:(features,pb,gb,gc)->(pc,pt,pcl,ptl)
+
+2.训练流程：ious->labels->bg/fg->selected_indices
+对于rpn的ious:
+    计算所有过滤的anchors(ga_in)与gt_boxes(gt_n)的ious@(bn,gb_n,gt_n).
+    根据这些ious确定后景label(0)与前景label(1)
+
+对于detection的ious:
+    计算所有proposal_boxes@(pb_n)于gt_boxes(gt_n)的ious@(bn,pb_n,gt_n)
+    根据这些ious确定后景label(0)于前景类label(target_label)
+
+
+一.iou和nms的使用
+iou只在训练中使用了2次：rpn.forward + detection.forward
+对于rpn，nms无论训练和推断，都要用到：rpn.generate_proposal
+对于detection，nms只在推断时用到：detection.generate_detection
+
+二.ao的前景列与后景列
+由于label为0对应后景，label为1对应前景，并且又由于使用交叉熵计算ao/gao损失，所以：
+ao的第1列（除去batch内索引列）是后景置信列，第二列是前景置信列.
+
+三.标签的变换与生成
+原始数据的标签=类标签+框坐标
+
+训练rpn所需要的标签=后景/前景label+变换坐标：
+1.被选中训练anchor的后景/前景label(0或1)：通过计算所有anchors与与gt_boxes的ious得到
+2.被选中训练anchor的变换坐标：对gt_boxes进行逆变换，得到标签变换
+
+训练detection所需要的标签=类label+变换坐标：
+1.被选中训练的proposal的类label：类label通过计算所有proposal与gt_boxes的ious得到
+2.被选中训练proposal的变换坐标：对gt_boxes进行逆变换，得到标签变换
+

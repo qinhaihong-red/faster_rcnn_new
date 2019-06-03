@@ -21,22 +21,36 @@ from roi.pooler import Pooler
 
 
 def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to_checkpoints_dir: str, path_to_resuming_checkpoint: Optional[str]):
+    
     dataset = DatasetBase.from_name(dataset_name)(path_to_data_dir, DatasetBase.Mode.TRAIN, Config.IMAGE_MIN_SIDE, Config.IMAGE_MAX_SIDE)
     dataloader = DataLoader(dataset, batch_size=Config.BATCH_SIZE,
                             sampler=DatasetBase.NearestRatioRandomSampler(dataset.image_ratios, num_neighbors=Config.BATCH_SIZE),
-                            num_workers=8, collate_fn=DatasetBase.padding_collate_fn, pin_memory=True)
+                            num_workers=0, collate_fn=DatasetBase.padding_collate_fn, pin_memory=True)
+
+    #为便于调试，num_works置为0
 
     Log.i('Found {:d} samples'.format(len(dataset)))
 
     backbone = BackboneBase.from_name(backbone_name)(pretrained=True)
-    model = nn.DataParallel(
-        Model(
+    # model = nn.DataParallel(
+    #     Model(
+    #         backbone, dataset.num_classes(), pooler_mode=Config.POOLER_MODE,
+    #         anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
+    #         rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N,
+    #         anchor_smooth_l1_loss_beta=Config.ANCHOR_SMOOTH_L1_LOSS_BETA, proposal_smooth_l1_loss_beta=Config.PROPOSAL_SMOOTH_L1_LOSS_BETA
+    #     ).cuda()
+    # )
+
+    # 单GPU,无需DataParallel
+    model =  Model(
             backbone, dataset.num_classes(), pooler_mode=Config.POOLER_MODE,
             anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
             rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N,
             anchor_smooth_l1_loss_beta=Config.ANCHOR_SMOOTH_L1_LOSS_BETA, proposal_smooth_l1_loss_beta=Config.PROPOSAL_SMOOTH_L1_LOSS_BETA
         ).cuda()
-    )
+
+
+
     optimizer = optim.SGD(model.parameters(), lr=Config.LEARNING_RATE,
                           momentum=Config.MOMENTUM, weight_decay=Config.WEIGHT_DECAY)
     scheduler = WarmUpMultiStepLR(optimizer, milestones=Config.STEP_LR_SIZES, gamma=Config.STEP_LR_GAMMA,
@@ -57,21 +71,25 @@ def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to
         Log.i(f'Model has been restored from file: {path_to_resuming_checkpoint}')
 
     device_count = torch.cuda.device_count()
+    #BATCH_SIZE默认是1
     assert Config.BATCH_SIZE % device_count == 0, 'The batch size is not divisible by the device count'
     Log.i('Start training with {:d} GPUs ({:d} batches per GPU)'.format(torch.cuda.device_count(),
                                                                         Config.BATCH_SIZE // torch.cuda.device_count()))
 
     while not should_stop:
         for _, (_, image_batch, _, bboxes_batch, labels_batch) in enumerate(dataloader):
-            batch_size = image_batch.shape[0]
-            image_batch = image_batch.cuda()
-            bboxes_batch = bboxes_batch.cuda()
-            labels_batch = labels_batch.cuda()
+            #训练使用的数据集采用voc2007
+            batch_size = image_batch.shape[0]#(1,)
+            image_batch = image_batch.cuda()#(1,3,h,w)
+            bboxes_batch = bboxes_batch.cuda()#(1,gt_n,4)
+            labels_batch = labels_batch.cuda()#(1,gt_n)
 
             anchor_objectness_losses, anchor_transformer_losses, proposal_class_losses, proposal_transformer_losses = \
                 model.train().forward(image_batch, bboxes_batch, labels_batch)
+            #rpn的损失
             anchor_objectness_loss = anchor_objectness_losses.mean()
             anchor_transformer_loss = anchor_transformer_losses.mean()
+            #detection的损失
             proposal_class_loss = proposal_class_losses.mean()
             proposal_transformer_loss = proposal_transformer_losses.mean()
             loss = anchor_objectness_loss + anchor_transformer_loss + proposal_class_loss + proposal_transformer_loss
@@ -116,9 +134,9 @@ if __name__ == '__main__':
     def main():
         parser = argparse.ArgumentParser()
         # 'voc2007', 'coco2017'等
-        parser.add_argument('-s', '--dataset', type=str, choices=DatasetBase.OPTIONS, required=True, help='name of dataset')
+        parser.add_argument('-s', '--dataset', type=str, default='voc2007',choices=DatasetBase.OPTIONS, help='name of dataset')
         # OPTIONS = ['resnet18', 'resnet50', 'resnet101']
-        parser.add_argument('-b', '--backbone', type=str, choices=BackboneBase.OPTIONS, required=True, help='name of backbone model')
+        parser.add_argument('-b', '--backbone', type=str, default='resnet101',choices=BackboneBase.OPTIONS, help='name of backbone model')
         parser.add_argument('-d', '--data_dir', type=str, default='./data', help='path to data directory')
         parser.add_argument('-o', '--outputs_dir', type=str, default='./outputs', help='path to outputs directory')
         parser.add_argument('-r', '--resume_checkpoint', type=str, help='path to resuming checkpoint')
