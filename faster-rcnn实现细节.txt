@@ -1,21 +1,25 @@
 
 训练过程：
-1.rpn和detection的训练都在各自的forward中：
-rpn.forward:(features,ab,gb,w,h)->(ao,at,aol,atl)
-detection.forward:(features,pb,gb,gc)->(pc,pt,pcl,ptl)
+    1.rpn和detection的forward训练输入输出：
+        rpn.forward:(features,ab,gb,w,h)->(ao,at,aol,atl)
+        detection.forward:(features,pb,gb,gc)->(pc,pt,pcl,ptl)
 
-2.训练流程：ious->labels->bg/fg->selected_indices
-对于rpn的ious:
-    计算所有过滤的anchors(ga_in)与gt_boxes(gt_n)的ious@(bn,gb_n,gt_n).
-    根据这些ious确定后景label(0)与前景label(1)
+        rpn.generate_proposal:(ak,ao,at,w,h)->pb
+        <不参与训练>detection.generate_detection:(pb,pc,pt,w,h)->(db,dc,dp,di)
 
-对于detection的ious:
-    计算所有proposal_boxes@(pb_n)于gt_boxes(gt_n)的ious@(bn,pb_n,gt_n)
-    根据这些ious确定后景label(0)于前景类label(target_label)
+    2.生成标签：ious->labels->bg/fg->selected_indices
+        对于rpn的ious:
+            计算所有过滤的anchors(ga_in)与gt_boxes(gt_n)的ious@(bn,gb_n,gt_n).
+            根据这些ious确定后景label(0)与前景label(1)
+
+        对于detection的ious:
+            计算所有proposal_boxes@(pb_n)于gt_boxes(gt_n)的ious@(bn,pb_n,gt_n)
+            根据这些ious确定后景label(0)与前景类label(target_label)
 
 
 一.iou和nms的使用
-iou只在训练中使用了2次：rpn.forward + detection.forward
+iou只在训练中为了生成标签使用了2次：rpn.forward + detection.forward
+
 对于rpn，nms无论训练和推断，都要用到：rpn.generate_proposal
 对于detection，nms只在推断时用到：detection.generate_detection
 
@@ -27,10 +31,54 @@ ao的第1列（除去batch内索引列）是后景置信列，第二列是前景
 原始数据的标签=类标签+框坐标
 
 训练rpn所需要的标签=后景/前景label+变换坐标：
-1.被选中训练anchor的后景/前景label(0或1)：通过计算所有anchors与与gt_boxes的ious得到
-2.被选中训练anchor的变换坐标：对gt_boxes进行逆变换，得到标签变换
+    1.被选中训练anchor的后景/前景label(0或1)：通过计算所有anchors与与gt_boxes的ious得到
+    2.被选中训练anchor的变换坐标：对gt_boxes进行逆变换，得到标签变换
 
 训练detection所需要的标签=类label+变换坐标：
-1.被选中训练的proposal的类label：类label通过计算所有proposal与gt_boxes的ious得到
-2.被选中训练proposal的变换坐标：对gt_boxes进行逆变换，得到标签变换
+    1.被选中训练的proposal的类label：类label通过计算所有proposal与gt_boxes的ious得到
+    2.被选中训练proposal的变换坐标：对gt_boxes进行逆变换，得到标签变换
 
+
+四.坐标变换
+对于训练：求得变换的label
+先把anchors和gt_boxes转为 中心-宽高 的形式
+(anchors,gt_boxes)->(t_x,t_y,t_w,t_h):
+    t_x = (gt_x - anchor_x)/gt_w
+    t_y = (gt_y - anchor_y)/gt_h
+    t_w = log(gt_w/anchor_w)
+    t_h = log(gt_h/anchor_h)
+
+对于推断：把得到transformer施加到anchors上，得到proposal box
+(anchors,at)->(p_x,p_y,p_w,p_h):
+    p_x = at_x * anchor_w + anchor_x
+    p_y = at_y * anchor_h + anchor_y
+    p_w = exp(at_w)*anchor_w
+    p_h = exp(at_h)*anchor_h
+
+
+五.训练参数
+    IMAGE_MIN_SIDE: float = 600.0
+    IMAGE_MAX_SIDE: float = 1000.0
+
+    ANCHOR_RATIOS: List[Tuple[int, int]] = [(1, 2), (1, 1), (2, 1)]
+    ANCHOR_SIZES: List[int] = [128, 256, 512]
+    POOLER_MODE: Pooler.Mode = Pooler.Mode.ALIGN
+
+    RPN_PRE_NMS_TOP_N: int = 12000
+    RPN_POST_NMS_TOP_N: int = 2000
+
+    ANCHOR_SMOOTH_L1_LOSS_BETA: float = 1.0
+    PROPOSAL_SMOOTH_L1_LOSS_BETA: float = 1.0
+
+    BATCH_SIZE: int = 1
+    LEARNING_RATE: float = 0.001
+    MOMENTUM: float = 0.9
+    WEIGHT_DECAY: float = 0.0005
+    STEP_LR_SIZES: List[int] = [50000, 70000]
+    STEP_LR_GAMMA: float = 0.1
+    WARM_UP_FACTOR: float = 0.3333
+    WARM_UP_NUM_ITERS: int = 500
+
+    NUM_STEPS_TO_DISPLAY: int = 20
+    NUM_STEPS_TO_SNAPSHOT: int = 10000
+    NUM_STEPS_TO_FINISH: int = 90000

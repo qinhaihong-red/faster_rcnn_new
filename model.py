@@ -73,7 +73,7 @@ class Model(nn.Module):
         #ga_n=ga_x * ga_y * 9
         anchor_bboxes = self.rpn.generate_anchors(image_width, image_height, num_x_anchors=features_width, num_y_anchors=features_height)
         anchor_bboxes = anchor_bboxes.to(features)#tensor的.to方法，转dtype或者device,或者两个都转. 这里是把anchor转为与features相同的dtype和device.
-        anchor_bboxes = anchor_bboxes.repeat(batch_size, 1, 1)#(bn,anchors_n,4)相当于增加一个批的维度
+        anchor_bboxes = anchor_bboxes.repeat(batch_size, 1, 1)#(bn,ga_n,4)相当于增加一个批的维度
 
         #self.training是nn.Module的成员变量.
         #对于infer，在前面已经置model为eval,因此会改变training为False.
@@ -86,7 +86,7 @@ class Model(nn.Module):
             anchor_objectnesses, anchor_transformers, anchor_objectness_losses, anchor_transformer_losses = self.rpn.forward(features, anchor_bboxes, gt_bboxes_batch, image_width, image_height)
             
             #这里proposal_bboxes是经过detach过的（require_grad为False），再传入下面的detection.forward
-            #2.rpn.generate_proposals@(ab,ao,at,w,h)->pb
+            #2.rpn.generate_proposals@(ab,ao,at,w,h)->pb: 把anchors变换为proposal(左上右下)，并进行筛选：置信筛选、nms筛选
             proposal_bboxes = self.rpn.generate_proposals(anchor_bboxes, anchor_objectnesses, anchor_transformers, image_width, image_height).detach()  # it's necessary to detach `proposal_bboxes` here
             
             #3.detection.forward@(f,pb,gc,gb)->pc,pt,pcl,ptl
@@ -100,11 +100,12 @@ class Model(nn.Module):
             #返回经过rpn变换、排序、nms后的proposal_bboxes:(bn,gp_n,4),以 左上右下 模式表示
             proposal_bboxes = self.rpn.generate_proposals(anchor_bboxes, anchor_objectnesses, anchor_transformers, image_width, image_height)
             
-            #(bn,gp_n,92) (bn,gp_n,92*4)
+            #(bn,gp_n,num_cls) (bn,gp_n,num_cls*4)
             proposal_classes, proposal_transformers = self.detection.forward(features, proposal_bboxes)
             
             #generate_detections只有在infer时用到
-            #(gd_n,4) (gd_n,) (gd_n,) (gd_n,)
+            # detection.generate_detections@(pb,pc,pt,w,h)->db,dc,dp :对proposal_box进行变换，并筛选：nms筛选
+            #db@(gd_n,4), dc@(gd_n,), dp@(gd_n,) (gd_n,)
             detection_bboxes, detection_classes, detection_probs, detection_batch_indices = self.detection.generate_detections(proposal_bboxes, proposal_classes, proposal_transformers, image_width, image_height)
             return detection_bboxes, detection_classes, detection_probs, detection_batch_indices
 
@@ -153,32 +154,34 @@ class Model(nn.Module):
             if not self.training:
                 #(bn,gp_n)
                 proposal_batch_indices = torch.arange(end=batch_size, dtype=torch.long, device=proposal_bboxes.device).view(-1, 1).repeat(1, proposal_bboxes.shape[1])
-                #ROI pooling:(gp_n,1024,7,7)
+                #ROI pooling:(bn,gp_n,1024,7,7). 这里的ROI pooling相当于把features与pb进行合并
                 pool = Pooler.apply(features, proposal_bboxes.view(-1, 4), proposal_batch_indices.view(-1), mode=self._pooler_mode)
                 
-                hidden = self.hidden(pool)#(n4,2048,4,4)
-                hidden = F.adaptive_max_pool2d(input=hidden, output_size=1)#(n4,2048,1,1)
-                hidden = hidden.view(hidden.shape[0], -1)#(n4,2048)
+                hidden = self.hidden(pool)#(bn,gp_n,2048,4,4). 这里(7,7)变为(4,4)的原因是hidden中还有个stride=2的卷积层.
+                hidden = F.adaptive_max_pool2d(input=hidden, output_size=1)#(bn,gp_n,2048,1,1)
+                hidden = hidden.view(hidden.shape[0], -1)#(bn,gp_n,2048)
 
-                proposal_classes = self._proposal_class(hidden)#作分类的线性变换：(n4,num_cls)
-                proposal_transformers = self._proposal_transformer(hidden)#框回归：(n4,num_cls*4)
+                #self._proposal_class@Linear(2048,num_cls) self._proposal_transformer@Linear(2048,4*num_cls)
+                proposal_classes = self._proposal_class(hidden)#作分类的线性变换：(bn,gp_n,num_cls)
+                proposal_transformers = self._proposal_transformer(hidden)#框回归：(bn,gp_n,num_cls*4)
 
-                proposal_classes = proposal_classes.view(batch_size, -1, proposal_classes.shape[-1])#(batch_n,n4,num_cls)
-                proposal_transformers = proposal_transformers.view(batch_size, -1, proposal_transformers.shape[-1])#(batch_n,n4,num_cls*4)
+                proposal_classes = proposal_classes.view(batch_size, -1, proposal_classes.shape[-1])#(bn,gp_n,num_cls)
+                proposal_transformers = proposal_transformers.view(batch_size, -1, proposal_transformers.shape[-1])#(bn,gp_n,num_cls*4)
                 return proposal_classes, proposal_transformers
             else:
                 #NOTE 总的处理流程类似rpn的训练forward: ious->labels->fg/bg->selected_indices.
                 
                 # find labels for each `proposal_bboxes`
-                # 1.为每个pb找到类label@(bn,pb_n)，默认值为-1
+                # 1.为每个pb找到类label@(bn,gp_n)，默认值为-1
                 labels = torch.full((batch_size, proposal_bboxes.shape[1]), -1, dtype=torch.long, device=proposal_bboxes.device)
-                # ious@(bn,pb_n,gb_n) ious是确定labels的关键
+                # ious@(bn,gp_n,gb_n) ious是确定labels的关键
                 ious = BBox.iou(proposal_bboxes, gt_bboxes_batch)#NOTE iou在detection.forward中只用到一次，在rpn.forward中也只用到一次
-                proposal_max_ious, proposal_assignments = ious.max(dim=2)#(bn,pb_n)
+                proposal_max_ious, proposal_assignments = ious.max(dim=2)#(bn,gp_n)
                 labels[proposal_max_ious < 0.5] = 0#背景类
-                fg_masks = proposal_max_ious >= 0.5#(bn,pb_n) 前景类的条件
+                fg_masks = proposal_max_ious >= 0.5#(bn,gp_n) 前景类的条件
                 if len(fg_masks.nonzero()) > 0:
-                    labels[fg_masks] = gt_classes_batch[fg_masks.nonzero()[:, 0], proposal_assignments[fg_masks]]#为前景类设置 类label
+                    labels[fg_masks] = gt_classes_batch[fg_masks.nonzero()[:, 0], proposal_assignments[fg_masks]]
+                    # gt_classes_batch@(b,gt_n).  为前景类设置 类label
 
                 #现在labels共分为3种：
                 #a. 为0 ，对应背景proposal
@@ -189,13 +192,16 @@ class Model(nn.Module):
                 #2.确定selected_indices, 选出 batch_size x 128 个训练样本
                 fg_indices = (labels > 0).nonzero()#(fg_n,2)
                 bg_indices = (labels == 0).nonzero()#(bg_n,2)
-                fg_indices = fg_indices[torch.randperm(len(fg_indices))[:min(len(fg_indices), 32 * batch_size)]]
+                fg_indices = fg_indices[torch.randperm(len(fg_indices))[:min(len(fg_indices), 32 * batch_size)]]#最少len_fg，最多32个
                 bg_indices = bg_indices[torch.randperm(len(bg_indices))[:128 * batch_size - len(fg_indices)]]
                 selected_indices = torch.cat([fg_indices, bg_indices], dim=0)#(bn*128,2)
                 #分裂为元素为2的tuple，每个元素是上面的一列：([批内索引]，[pb内索引])
                 selected_indices = selected_indices[torch.randperm(len(selected_indices))].unbind(dim=1)
 
                 proposal_bboxes = proposal_bboxes[selected_indices]#(bn*128,4)
+                #以下是对gt_bboxes_batch的多维索引：selected_indices[0]是128个批内图像的索引，表示选择128个图像，
+                #proposal_assignments[selected_indices]表示128个图像对应的gt_box序号，也是128个
+                #最终选择了128个gt_bboxes.
                 gt_bboxes = gt_bboxes_batch[selected_indices[0], proposal_assignments[selected_indices]]#(bn*128,4)
                 gt_proposal_classes = labels[selected_indices]#(bn*128,)
                 gt_proposal_transformers = BBox.calc_transformer(proposal_bboxes, gt_bboxes)#(bn*128,4)
@@ -210,7 +216,7 @@ class Model(nn.Module):
 
                 #self._proposal_class@Linear(2048,num_cls) self._proposal_transformer@Linear(2048,4*num_cls)
                 proposal_classes = self._proposal_class(hidden)#(bn*128,num_cls)
-                proposal_transformers = self._proposal_transformer(hidden)#(bn*128,num_cls)
+                proposal_transformers = self._proposal_transformer(hidden)#(bn*128,num_cls*4)
 
                 proposal_class_losses, proposal_transformer_losses = self.loss(proposal_classes, proposal_transformers,
                                                                                gt_proposal_classes, gt_proposal_transformers,
@@ -259,6 +265,7 @@ class Model(nn.Module):
 
             return cross_entropies, smooth_l1_losses
         
+        #faster-rcnn的预测张量都是分开的，yolo集中到一个张量中更简洁
         #proposal_bboxes @(bn,gp_n,4) 
         #proposal_classes@(bn,gp_n,num_cls) 
         #proposal_transformers@(bn,gp_n,4*num_cls)  

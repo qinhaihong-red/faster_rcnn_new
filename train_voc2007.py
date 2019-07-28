@@ -12,7 +12,7 @@ from torch import optim
 from torch.utils.data import DataLoader
 
 from backbone.base import Base as BackboneBase
-from config.train_config import TrainConfig as Config
+from config.train_voc2007_config import TrainVOC2007Config as Config
 from dataset.base import Base as DatasetBase
 from extention.lr_scheduler import WarmUpMultiStepLR
 from logger import Logger as Log
@@ -32,22 +32,23 @@ def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to
     Log.i('Found {:d} samples'.format(len(dataset)))
 
     backbone = BackboneBase.from_name(backbone_name)(pretrained=True)
-    # model = nn.DataParallel(
-    #     Model(
-    #         backbone, dataset.num_classes(), pooler_mode=Config.POOLER_MODE,
-    #         anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
-    #         rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N,
-    #         anchor_smooth_l1_loss_beta=Config.ANCHOR_SMOOTH_L1_LOSS_BETA, proposal_smooth_l1_loss_beta=Config.PROPOSAL_SMOOTH_L1_LOSS_BETA
-    #     ).cuda()
-    # )
-
-    # 单GPU,无需DataParallel
-    model =  Model(
+    
+    model = nn.DataParallel(
+        Model(
             backbone, dataset.num_classes(), pooler_mode=Config.POOLER_MODE,
             anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
             rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N,
             anchor_smooth_l1_loss_beta=Config.ANCHOR_SMOOTH_L1_LOSS_BETA, proposal_smooth_l1_loss_beta=Config.PROPOSAL_SMOOTH_L1_LOSS_BETA
         ).cuda()
+    )
+
+    # 便于调试
+    # model =  Model(
+    #         backbone, dataset.num_classes(), pooler_mode=Config.POOLER_MODE,
+    #         anchor_ratios=Config.ANCHOR_RATIOS, anchor_sizes=Config.ANCHOR_SIZES,
+    #         rpn_pre_nms_top_n=Config.RPN_PRE_NMS_TOP_N, rpn_post_nms_top_n=Config.RPN_POST_NMS_TOP_N,
+    #         anchor_smooth_l1_loss_beta=Config.ANCHOR_SMOOTH_L1_LOSS_BETA, proposal_smooth_l1_loss_beta=Config.PROPOSAL_SMOOTH_L1_LOSS_BETA
+    #     ).cuda()
 
     ''' 训练用参数：
 
@@ -84,6 +85,8 @@ def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to
     #优化算法的两种衰减：
     #1. 权值的衰减：表现为在总的损失函数后面再加上权值的L2范数
     #2.学习率的衰减：表现为通过学习率调节器以不同策略随着学习步增加，对学习率进行衰减调节
+
+    #optimizer = optim.Adam(model.parameters())
 
     optimizer = optim.SGD(model.parameters(), lr=Config.LEARNING_RATE,
                           momentum=Config.MOMENTUM, weight_decay=Config.WEIGHT_DECAY)
@@ -152,10 +155,20 @@ def _train(dataset_name: str, backbone_name: str, path_to_data_dir: str, path_to
                 eta = (num_steps_to_finish - step) / steps_per_sec / 3600
                 avg_loss = sum(losses) / len(losses)
                 lr = scheduler.get_lr()[0]
-                Log.i(f'[Step {step}] Avg. Loss = {avg_loss:.6f}, Learning Rate = {lr:.8f} ({samples_per_sec:.2f} samples/sec; ETA {eta:.1f} hrs)')
+                #lr = optimizer.param_groups[0]['lr']
+                Log.i(f'[Step {step}] Avg. Loss = {avg_loss:.6f}, Learning Rate = {lr} ({samples_per_sec:.2f} samples/sec; ETA {eta:.1f} hrs)')
+
+            #test
+            if step == 10:
+                path_to_checkpoint = model.module.save(path_to_checkpoints_dir, step, optimizer, scheduler)
+                #path_to_checkpoint = model.module.save(path_to_checkpoints_dir, step, optimizer)
+
+                Log.i(f'Model has been saved to {path_to_checkpoint}')
 
             if step % num_steps_to_snapshot == 0 or should_stop:
                 path_to_checkpoint = model.module.save(path_to_checkpoints_dir, step, optimizer, scheduler)
+                #path_to_checkpoint = model.module.save(path_to_checkpoints_dir, step, optimizer)
+
                 Log.i(f'Model has been saved to {path_to_checkpoint}')
 
             if should_stop:

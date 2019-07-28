@@ -72,15 +72,21 @@ if __name__ == '__main__':
         这个model-180000.pth对应的训练数据是coco2017, 因此不能使用voc2007.
         '''
         #指定映射参数 > COOC模型以及验证
-        parser.add_argument('-s', '--dataset', type=str, default='coco2017',choices=DatasetBase.OPTIONS, help='name of dataset')
+        # parser.add_argument('-s', '--dataset', type=str, default='coco2017',choices=DatasetBase.OPTIONS, help='name of dataset')
+        # parser.add_argument('-b', '--backbone', type=str, default='resnet101',choices=BackboneBase.OPTIONS,  help='name of backbone model')
+        # parser.add_argument('-c', '--checkpoint', type=str, default='model-180000.pth', help='path to checkpoint')
+
+        #>VOC2007
+        parser.add_argument('-s', '--dataset', type=str, default='voc2007',choices=DatasetBase.OPTIONS, help='name of dataset')
         parser.add_argument('-b', '--backbone', type=str, default='resnet101',choices=BackboneBase.OPTIONS,  help='name of backbone model')
-        parser.add_argument('-c', '--checkpoint', type=str, default='model-180000.pth', help='path to checkpoint')
+        model_path='outputs/checkpoints-20190702190950-voc2007-resnet101-f8049269/model-22500.pth'
+        parser.add_argument('-c', '--checkpoint', type=str, default=model_path, help='path to checkpoint')
 
         parser.add_argument('-p', '--probability_threshold', type=float, default=0.6, help='threshold of detection probability')
-        parser.add_argument('--image_min_side', default=800,type=float, help='default: {:g}'.format(Config.IMAGE_MIN_SIDE))
-        parser.add_argument('--image_max_side',default=1333, type=float, help='default: {:g}'.format(Config.IMAGE_MAX_SIDE))
+        parser.add_argument('--image_min_side', default=600,type=float, help='default: {:g}'.format(Config.IMAGE_MIN_SIDE))
+        parser.add_argument('--image_max_side',default=1000, type=float, help='default: {:g}'.format(Config.IMAGE_MAX_SIDE))
         parser.add_argument('--anchor_ratios', type=str, help='default: "{!s}"'.format(Config.ANCHOR_RATIOS))
-        parser.add_argument('--anchor_sizes', type=str,default="[64, 128, 256, 512]",help='default: "{!s}"'.format(Config.ANCHOR_SIZES))
+        parser.add_argument('--anchor_sizes', type=str,default="[128, 256, 512]",help='default: "{!s}"'.format(Config.ANCHOR_SIZES))
         parser.add_argument('--pooler_mode', type=str, choices=Pooler.OPTIONS, help='default: {.value:s}'.format(Config.POOLER_MODE))
         parser.add_argument('--rpn_pre_nms_top_n', type=int, help='default: {:d}'.format(Config.RPN_PRE_NMS_TOP_N))
         parser.add_argument('--rpn_post_nms_top_n', type=int, default=1000,help='default: {:d}'.format(Config.RPN_POST_NMS_TOP_N))

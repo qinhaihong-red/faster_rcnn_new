@@ -57,8 +57,8 @@ class RegionProposalNetwork(nn.Module):
         batch_size = features.shape[0]
 
         features = self._features(features)#(bn,1024,ga_y,ga_x)->(bn,512,ga_y,ga_x)@ksp(3,1,1)
-        anchor_objectnesses = self._anchor_objectness(features)# (bn, 18,ga_y,ga_x)@ksp(1,1,0) 这里假设每个点的anchor数为9
-        anchor_transformers = self._anchor_transformer(features)#(bn, 36,ga_y,ga_x)@ksp(1,1,0)
+        anchor_objectnesses = self._anchor_objectness(features)# (bn,2*9,ga_y,ga_x)@ksp(1,1,0) 这里假设每个点的anchor数为9
+        anchor_transformers = self._anchor_transformer(features)#(bn,4*9,ga_y,ga_x)@ksp(1,1,0)
 
         #输出所有anchor的obj(x2)和coor(x4).
         #这个处理类似于yolo的(1,10647,85),但是yolo由于输入图像的尺寸固定，因此输出也是固定的.
@@ -71,13 +71,14 @@ class RegionProposalNetwork(nn.Module):
         #self.training是nn.Module的成员变量.
         #对于infer，在前面已经置model为eval,因此会改变training为False.
         if not self.training:
+            #在推断的时候，anchors是没啥用的，也不会传进来
             return anchor_objectnesses, anchor_transformers
         else:
             #NOTE 总的训练流程是：ious->labels->bg/fg->selected_indices
 
             # remove cross-boundary
             # NOTE: The length of `inside_indices` is guaranteed to be a multiple of `anchor_bboxes.shape[0]` as each batch in `anchor_bboxes` is the same
-            ## 1.先过滤掉处于边缘的ga
+            ## 1.先过滤掉处于边缘的anchors
             inside_indices = BBox.inside(anchor_bboxes, left=0, top=0, right=image_width, bottom=image_height).nonzero().unbind(dim=1)
             inside_anchor_bboxes = anchor_bboxes[inside_indices].view(batch_size, -1, anchor_bboxes.shape[2])#ab@(bn,ga_in,4)
             inside_anchor_objectnesses = anchor_objectnesses[inside_indices].view(batch_size, -1, anchor_objectnesses.shape[2])#ao@(bn,ga_in,2)
@@ -88,7 +89,7 @@ class RegionProposalNetwork(nn.Module):
             #注意labels的第一列是batch_size，通常为1
             #labels@(bn,ga_in)
             labels = torch.full((batch_size, inside_anchor_bboxes.shape[1]), -1, dtype=torch.long, device=inside_anchor_bboxes.device)
-            ious = BBox.iou(inside_anchor_bboxes, gt_bboxes_batch)#(bn,ga_in,gt_n) ：!!!NOTE iou在rpn中只用到一次，在detection中也只用到一次
+            ious = BBox.iou(inside_anchor_bboxes, gt_bboxes_batch)#广播产生：(bn,ga_in,gt_n) ：!!!NOTE iou在rpn中只用到一次，在detection中也只用到一次
             # NOTE 计算每个anchor与所有gt_boxes的iou是关键!
             # 对于返回的ious，先忽略第一列（表示批内的编号，对于batch_size为1的情况，这个编号总是为0），
             # 则返回的ious的每一行表示每个生成anchor与所有gt_boxes(每列表示1个gt_box)的ious
@@ -104,8 +105,9 @@ class RegionProposalNetwork(nn.Module):
             selector = selector[:, :2]#只取前两列，(nonzero_num,2)，比如(5,2)
             anchor_additions=selector.unbind(dim=1)#使用unbind把selector分解为具有2个元素的tuple,每个元素对应上面的1列,这样主要是为了下面的多维数组索引
 
+            #测试用
             #anchor_additions2 = ((ious > 0) & (ious == gt_max_ious.unsqueeze(dim=1))).nonzero()[:, :2].unbind(dim=1)
-            result=(selector == ((ious > 0) & (ious == gt_max_ious.unsqueeze(dim=1))).nonzero()[:, :2]).sum()
+            #result=(selector == ((ious > 0) & (ious == gt_max_ious.unsqueeze(dim=1))).nonzero()[:, :2]).sum()
   
             #NOTE 根据计算出ious确定anchor的labels,再由labels确定前景(1)/后景(0),再从前景/后景中选择一批数据训练:
             # ious@(ab&gb)-->anchors_labels@(0,1,-1)-->fg(1)&bg(0)-->selected_indices
@@ -120,14 +122,14 @@ class RegionProposalNetwork(nn.Module):
 
             # select `batch_size` x 256 samples
             ## 3.选择 batch_size x 256个样本训练 
-            fg_indices = (labels == 1).nonzero()#(fg_n,2) 注意第一列表示批.第二列对应ga_in索引.
+            fg_indices = (labels == 1).nonzero()#(fg_n,2) 注意第一列表示批量.第二列对应ga_in索引.
             bg_indices = (labels == 0).nonzero()#(bg_n,2)
             len_fg=len(fg_indices)#(fg_n,)
             len_bg=len(bg_indices)#(bg_n,)
             randperm_fg=torch.randperm(len_fg)#随机排列所有的前景(fg_n,)
             randperm_bg=torch.randperm(len_bg)#随机排列所有的后景(bg_n,)
 
-            fg_indices = fg_indices[randperm_fg[:min(len_fg, 128 * batch_size)]]#选出的前景(sfg_n,2)
+            fg_indices = fg_indices[randperm_fg[:min(len_fg, 128 * batch_size)]]#选出的前景(sfg_n,2)，最少len_fg个，最多128个
             bg_indices = bg_indices[randperm_bg[:256 * batch_size - len_fg]]#选出的后景(sbg_n,2).总计sfg+sbg=256
             
             # NOTE：selected_indices 是下面选择ao/at与gao/gat的关键
@@ -190,12 +192,14 @@ class RegionProposalNetwork(nn.Module):
 
 
     #这是一个相当独立的函数，生成原图上的anchors：(anchors_x * anchors_y * 9,4)
+    #首先以 中心-宽高 的形式生成anchors（这样是最方便的），返回前再转为 左上右下 的形式
     def generate_anchors(self, image_width: int, image_height: int, num_x_anchors: int, num_y_anchors: int) -> Tensor:
         #image_width是原图经过min/max缩放过的，即至少有一边符合最大边或最小边
-        #(anchors_x,anchors_y)=(img_width/16,img_height/16)
+        #(ax,ay)=(anchors_x,anchors_y)=(img_width/16,img_height/16)
+        #ga_n=ax * ax * 9
         #anchor坐标是基于原图的
-        center_ys = np.linspace(start=0, stop=image_height, num=num_y_anchors + 2)[1:-1]#(anchors_y,)
-        center_xs = np.linspace(start=0, stop=image_width, num=num_x_anchors + 2)[1:-1]# (anchors_x,)
+        center_ys = np.linspace(start=0, stop=image_height, num=num_y_anchors + 2)[1:-1]#(ay,)
+        center_xs = np.linspace(start=0, stop=image_width, num=num_x_anchors + 2)[1:-1]# (ax,)
         ratios = np.array(self._anchor_ratios)
         ratios = ratios[:, 0] / ratios[:, 1]#[0.5,1,2]@(3,)
         sizes = np.array(self._anchor_sizes)#[128,256,512]@(3,) #假设3个size. infer中实际用到了4个size，多了一个64.
@@ -214,12 +218,13 @@ class RegionProposalNetwork(nn.Module):
         widths = sizes * np.sqrt(1 / ratios)#(anchors_n,)
         heights = sizes * np.sqrt(ratios)#(anchors_n,)
 
-        center_based_anchor_bboxes = np.stack((center_xs, center_ys, widths, heights), axis=1)#(anchors_n,4)
-        center_based_anchor_bboxes = torch.from_numpy(center_based_anchor_bboxes).float()#(anchors_n,4)
-        anchor_bboxes = BBox.from_center_base(center_based_anchor_bboxes)#把 中心宽高 转换为 左上右下 的形式:(anchors_n,4)
-
+        center_based_anchor_bboxes = np.stack((center_xs, center_ys, widths, heights), axis=1)#(ga_n,4)
+        center_based_anchor_bboxes = torch.from_numpy(center_based_anchor_bboxes).float()#(ga_n,4)
+        anchor_bboxes = BBox.from_center_base(center_based_anchor_bboxes)#把 中心宽高 转换为 左上右下 的形式:(ga_n,4)
+        #生成的anchors有许多是跨越边界的框，后续在训练（推断用不到anchors）的时候，要先排除这些框
         return anchor_bboxes
 
+    #经过变换后的anchor称之为proposal,变换是分界岭
     def generate_proposals(self, anchor_bboxes: Tensor, objectnesses: Tensor, transformers: Tensor, image_width: int, image_height: int) -> Tensor:
 
         #ga_n=anchors_n=anchors_x * anchors_y * 9
@@ -246,7 +251,7 @@ class RegionProposalNetwork(nn.Module):
             nms_proposal_bboxes_batch.append(nms_bboxes)
 
         #从一批图像中，找到proposal_boxes最多的，记录数量为max_nms_n
-        #其它图像的proposal_boxes要对齐max_nms_n(dim0方向，即增加行数)
+        #其它图像的proposal_boxes要0填充对齐max_nms_n(dim0方向，即增加行数)
         #就是说，一批内每幅图像的proposal_boxes数量都要相等
         max_nms_proposal_bboxes_length = max([len(it) for it in nms_proposal_bboxes_batch])
         padded_proposal_bboxes = []
@@ -259,5 +264,5 @@ class RegionProposalNetwork(nn.Module):
                 ])#为每幅图像的proposal_boxes增加 delta 行，每行4列 . 其中 delta = max_nms_proposal_bboxes_length - len(nms_proposal_bboxes) 
             )
 
-        padded_proposal_bboxes = torch.stack(padded_proposal_bboxes, dim=0)#(bn,max_nms_n,4)->外部符号记为(bn,gp_n,4)，gp_n表示经过generate_proposal处理过的
+        padded_proposal_bboxes = torch.stack(padded_proposal_bboxes, dim=0)#(bn,max_nms_n,4)->外部符号记为pb@(bn,gp_n,4)，gp_n表示经过generate_proposal处理过的
         return padded_proposal_bboxes

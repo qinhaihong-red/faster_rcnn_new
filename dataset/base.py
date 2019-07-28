@@ -68,7 +68,7 @@ class Base(torch.utils.data.dataset.Dataset):
     def num_classes() -> int:
         raise NotImplementedError
 
-    ##所有和图像预处理相关的方法，都可以用静态方法的形式，写道dataset类的内部
+    ##所有和图像预处理相关的方法，都可以用静态方法的形式，写到dataset类的内部
     @staticmethod
     def preprocess(image: PIL.Image.Image, image_min_side: float, image_max_side: float) -> Tuple[Tensor, float]:
         # resize according to the rules:
